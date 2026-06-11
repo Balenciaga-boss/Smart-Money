@@ -1,0 +1,6 @@
+.deps/
+.venv/
+__pycache__/
+*.py[cod]
+smc_watchlist.json
+.env

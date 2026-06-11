@@ -182,7 +182,11 @@ Candidate targets are extracted from completed candles after the POI lookback:
 - the proximal boundary of an opposing POI.
 
 Only targets beyond Entry in the trade direction are considered. Candidates
-are sorted by distance from Entry. Select the nearest candidate satisfying:
+that price has already traded through after POI formation are considered
+consumed and excluded. For a pending LONG target must therefore remain above
+both Entry and current price; for a pending SHORT it must remain below both.
+Candidates are sorted by distance from Entry. Select the nearest candidate
+satisfying:
 
 `abs(target - entry) / abs(entry - stop_loss) >= MIN_RISK_REWARD`
 
@@ -261,9 +265,9 @@ Current price: 0.7645
 POI: 1H ORDER_BLOCK [0.7400 - 0.7425]
 Entry: 0.7425
 Stop Loss: 0.7378
-Take Profit: 0.7521
+Take Profit: 0.7800
 Target: 15m equal highs
-R:R: 1:2.04
+R:R: 1:7.98
 Strength: HIGH
 Confluence: HTF CHoCH; liquidity sweep; first test of HTF POI
 

@@ -11,6 +11,7 @@ def format_signal(signal: Signal, now: datetime | None = None) -> str:
     side_label = "LONG" if signal.side == "LONG" else "SHORT"
     side_icon = "🟢" if signal.side == "LONG" else "🔴"
     strength = f"🔥 {signal.strength}" if signal.strength == "СИЛЬНЫЙ" else signal.strength
+    risk_reward = calculate_risk_reward(signal)
 
     return f"""
 {side_icon} <b>{side_label} SMC СИГНАЛ</b> | <code>{escape(signal.symbol)}</code>
@@ -28,7 +29,15 @@ POI / Order Block: около <code>{signal.poi:.4f}</code>
 <b>Сила сигнала:</b> {escape(strength)}
 
 Stop-Loss: <code>{signal.stop_loss:.4f}</code>
-Take-Profit: <code>{signal.take_profit:.4f}</code> (примерно 1:2.8)
+Take-Profit: <code>{signal.take_profit:.4f}</code> (примерно 1:{risk_reward:.2f})
 
 {timestamp.strftime("%H:%M:%S")} UTC
 """.strip()
+
+
+def calculate_risk_reward(signal: Signal) -> float:
+    risk = abs(signal.current_price - signal.stop_loss)
+    reward = abs(signal.take_profit - signal.current_price)
+    if risk == 0:
+        return 0.0
+    return reward / risk

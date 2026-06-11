@@ -1,9 +1,852 @@
 {
-  "root": "C:\\Users\\Lenovo\\Desktop\\Smart-money",
-  "node_count": 0,
-  "edge_count": 0,
-  "file_count": 0,
-  "symbol_count": 0,
-  "nodes": [],
-  "edges": []
+  "root": "C:\\Users\\Lenovo\\Desktop\\Smart-money\\Smart-Money",
+  "node_count": 31,
+  "edge_count": 63,
+  "file_count": 15,
+  "symbol_count": 16,
+  "nodes": [
+    {
+      "id": "README.md",
+      "kind": "file",
+      "path": "README.md",
+      "ext": ".md",
+      "size": 720,
+      "keywords": [],
+      "content": "# Smart Money SMC Bot\n\nTelegram bot that scans Bybit futures symbols and sends simple SMC-style LONG/SHORT alerts.\n\n## Setup\n\n```powershell\n& \"C:\\Users\\Lenovo\\AppData\\Local\\Programs\\Python\\Python311\\python.exe\" -m pip install --target .deps -r requirements.txt\nCopy-Item .env.example .env\n```\n\nFill `.env`, then run:\n\n```powershell\n$env:PYTHONPATH = \"$PWD\\.deps\"\n& \"C:\\Users\\Lenovo\\AppData\\Local\\Programs\\Python\\Python311\\python.exe\" -m smart_money_bot\n```\n\n## Commands\n\n- `/add SYMBOL`\n- `/remove SYMBOL`\n- `/list`\n- `/status`\n\n## Tests\n\n```powershell\n$env:PYTHONPATH = \"$PWD\\.deps\"\n& \"C:\\Users\\Lenovo\\AppData\\Local\\Programs\\Python\\Python311\\python.exe\" -m unittest discover -s tests\n```\n",
+      "summary": "Smart Money SMC Bot.",
+      "file_hash": "d421ee97"
+    },
+    {
+      "id": "run_bot.py",
+      "kind": "file",
+      "path": "run_bot.py",
+      "ext": ".py",
+      "size": 83,
+      "keywords": [],
+      "content": "from smart_money_bot.main import main\n\n\nif __name__ == \"__main__\":\n    main()\n",
+      "summary": "from smart_money_bot.main import main.",
+      "file_hash": "5022332e"
+    },
+    {
+      "id": "smart_money_bot\\analysis.py",
+      "kind": "file",
+      "path": "smart_money_bot\\analysis.py",
+      "ext": ".py",
+      "size": 3046,
+      "keywords": [
+        "calculate_atr",
+        "calculate",
+        "atr",
+        "analyze_market_data",
+        "analyze",
+        "market",
+        "data"
+      ],
+      "content": "from __future__ import annotations\n\nfrom statistics import mean\n\nfrom .models import Candle, Signal\n\n\ndef calculate_atr(candles: list[Candle], period: int = 14) -> list[float | None]:\n    true_ranges: list[float] = []\n\n    for index, candle in enumerate(candles):\n        if index == 0:\n            true_range = candle.high - candle.low\n        else:\n            previous_close = candles[index - 1].close\n            true_range = max(\n                candle.high - candle.low,\n                abs(candle.high - previous_close),\n                abs(candle.low - previous_close),\n            )\n        true_ranges.append(true_range)\n\n    atr: list[float | None] = []\n    for index in range(len(true_ranges)):\n        if index + 1 < period:\n            atr.append(None)\n            continue\n        window = true_ranges[index + 1 - period : index + 1]\n        atr.append(mean(window))\n\n    return atr\n\n\ndef analyze_market_data(\n    symbol: str,\n    candles_15m: list[Candle],\n    candles_1h: list[Candle],\n    candles_4h: list[Candle],\n) -> Signal | None:\n    if len(candles_15m) < 40 or len(candles_1h) < 12 or len(candles_4h) < 20:\n        return None\n\n    bias_4h = \"BULLISH\" if candles_4h[-1].close > candles_4h[-20].open else \"BEARISH\"\n    bias_1h = \"BULLISH\" if candles_1h[-1].close > candles_1h[-12].open else \"BEARISH\"\n    if bias_4h != bias_1h:\n        return None\n\n    current_price = candles_15m[-1].close\n    recent = candles_15m[-40:]\n    recent_high = max(candle.high for candle in recent)\n    recent_low = min(candle.low for candle in recent)\n    last = candles_15m[-1]\n    atr = calculate_atr(candles_15m)[-1]\n    if atr is None or atr <= 0:\n        return None\n\n    side: str | None = None\n    reason = \"\"\n    strength = \"\u0421\u0440\u0435\u0434\u043d\u0438\u0439\"\n\n    if bias_4h == \"BULLISH\" and last.close > last.open and current_price > recent_low * 1.002:\n        side = \"LONG\"\n        reason = \"\u0411\u044b\u0447\u044c\u044f \u0441\u0432\u0435\u0447\u0430 + \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u043a\u0430\"\n        if last.close - last.open > atr * 1.8:\n            strength = \"\u0421\u0418\u041b\u042c\u041d\u042b\u0419\"\n    elif bias_4h == \"BEARISH\" and last.close < last.open and current_price < recent_high * 0.998:\n        side = \"SHORT\"\n        reason = \"\u041c\u0435\u0434\u0432\u0435\u0436\u044c\u044f \u0441\u0432\u0435\u0447\u0430 + \u0441\u043e\u043f\u0440\u043e\u0442\u0438\u0432\u043b\u0435\u043d\u0438\u0435\"\n        if last.open - last.close > atr * 1.8:\n            strength = \"\u0421\u0418\u041b\u042c\u041d\u042b\u0419\"\n\n    if side is None:\n        return None\n\n    stop_loss = current_price - atr * 1.8 if side == \"LONG\" else current_price + atr * 1.8\n    take_profit = current_price + atr * 3.2 if side == \"LONG\" else current_price - atr * 3.2\n    poi = recent_low if side == \"LONG\" else recent_high\n\n    return Signal(\n        symbol=symbol,\n        side=side,\n        bias_4h=bias_4h,\n        bias_1h=bias_1h,\n        current_price=current_price,\n        recent_high=recent_high,\n        recent_low=recent_low,\n        poi=poi,\n        reason=reason,\n        strength=strength,\n        stop_loss=round(stop_loss, 4),\n        take_profit=round(take_profit, 4),\n    )\n",
+      "summary": "from __future__ import annotations. Contains 2 functions/classes: calculate_atr, analyze_market_data.",
+      "file_hash": "018ab69f"
+    },
+    {
+      "id": "smart_money_bot\\analysis.py::calculate_atr",
+      "kind": "symbol",
+      "path": "smart_money_bot\\analysis.py",
+      "ext": ".py",
+      "size": 24,
+      "keywords": [
+        "calculate_atr",
+        "calculate",
+        "atr"
+      ],
+      "symbol_type": "use_case",
+      "name": "calculate_atr",
+      "line_start": 7,
+      "line_end": 30,
+      "body_hash": "d3008a41",
+      "confidence": "high",
+      "exported": true
+    },
+    {
+      "id": "smart_money_bot\\analysis.py::analyze_market_data",
+      "kind": "symbol",
+      "path": "smart_money_bot\\analysis.py",
+      "ext": ".py",
+      "size": 59,
+      "keywords": [
+        "analyze_market_data",
+        "analyze",
+        "market",
+        "data"
+      ],
+      "symbol_type": "use_case",
+      "name": "analyze_market_data",
+      "line_start": 33,
+      "line_end": 91,
+      "body_hash": "06c1bf7b",
+      "confidence": "high",
+      "exported": true
+    },
+    {
+      "id": "smart_money_bot\\config.py",
+      "kind": "file",
+      "path": "smart_money_bot\\config.py",
+      "ext": ".py",
+      "size": 1382,
+      "keywords": [
+        "settings",
+        "load_settings",
+        "load"
+      ],
+      "content": "from __future__ import annotations\n\nimport os\nfrom dataclasses import dataclass\n\nfrom dotenv import load_dotenv\n\n\n@dataclass(frozen=True)\nclass Settings:\n    bybit_api_key: str\n    bybit_api_secret: str\n    telegram_token: str\n    telegram_chat_id: str\n    scan_interval_seconds: int = 60\n    signal_cooldown_minutes: int = 45\n    watchlist_file: str = \"smc_watchlist.json\"\n\n\ndef load_settings() -> Settings:\n    load_dotenv()\n\n    settings = Settings(\n        bybit_api_key=_required_env(\"BYBIT_API_KEY\"),\n        bybit_api_secret=_required_env(\"BYBIT_API_SECRET\"),\n        telegram_token=_required_env(\"TELEGRAM_BOT_TOKEN\"),\n        telegram_chat_id=_required_env(\"TELEGRAM_CHAT_ID\"),\n        scan_interval_seconds=_int_env(\"SCAN_INTERVAL_SECONDS\", 60),\n        signal_cooldown_minutes=_int_env(\"SIGNAL_COOLDOWN_MINUTES\", 45),\n        watchlist_file=os.getenv(\"WATCHLIST_FILE\", \"smc_watchlist.json\"),\n    )\n\n    return settings\n\n\ndef _required_env(name: str) -> str:\n    value = os.getenv(name)\n    if not value:\n        raise RuntimeError(f\"Set {name} in .env\")\n    return value\n\n\ndef _int_env(name: str, default: int) -> int:\n    value = os.getenv(name)\n    if not value:\n        return default\n\n    try:\n        return int(value)\n    except ValueError as exc:\n        raise RuntimeError(f\"{name} must be an integer\") from exc\n",
+      "summary": "from __future__ import annotations. Contains 2 functions/classes: Settings, load_settings.",
+      "file_hash": "6064c977"
+    },
+    {
+      "id": "smart_money_bot\\config.py::load_settings",
+      "kind": "symbol",
+      "path": "smart_money_bot\\config.py",
+      "ext": ".py",
+      "size": 14,
+      "keywords": [
+        "load_settings",
+        "load",
+        "settings"
+      ],
+      "symbol_type": "use_case",
+      "name": "load_settings",
+      "line_start": 19,
+      "line_end": 32,
+      "body_hash": "d0388bb7",
+      "confidence": "high",
+      "exported": true
+    },
+    {
+      "id": "smart_money_bot\\config.py::Settings",
+      "kind": "symbol",
+      "path": "smart_money_bot\\config.py",
+      "ext": ".py",
+      "size": 8,
+      "keywords": [
+        "settings"
+      ],
+      "symbol_type": "model",
+      "name": "Settings",
+      "line_start": 9,
+      "line_end": 16,
+      "body_hash": "1ec10b9a",
+      "confidence": "high",
+      "exported": true
+    },
+    {
+      "id": "smart_money_bot\\exchange.py",
+      "kind": "file",
+      "path": "smart_money_bot\\exchange.py",
+      "ext": ".py",
+      "size": 1027,
+      "keywords": [
+        "bybitmarketdata",
+        "bybit",
+        "market",
+        "data"
+      ],
+      "content": "from __future__ import annotations\n\nfrom typing import Any\n\nimport ccxt\n\nfrom .models import Candle\n\n\nclass BybitMarketData:\n    def __init__(self, api_key: str, api_secret: str):\n        self.exchange = ccxt.bybit(\n            {\n                \"apiKey\": api_key,\n                \"secret\": api_secret,\n                \"enableRateLimit\": True,\n                \"options\": {\"defaultType\": \"future\"},\n            }\n        )\n\n    def fetch_candles(self, symbol: str, timeframe: str, limit: int) -> list[Candle]:\n        rows = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)\n        return [self._row_to_candle(row) for row in rows]\n\n    @staticmethod\n    def _row_to_candle(row: list[Any]) -> Candle:\n        timestamp, open_, high, low, close, volume = row\n        return Candle(\n            timestamp=int(timestamp),\n            open=float(open_),\n            high=float(high),\n            low=float(low),\n            close=float(close),\n            volume=float(volume),\n        )\n",
+      "summary": "from __future__ import annotations. Contains 1 function: BybitMarketData.",
+      "file_hash": "2b8c9b91"
+    },
+    {
+      "id": "smart_money_bot\\exchange.py::BybitMarketData",
+      "kind": "symbol",
+      "path": "smart_money_bot\\exchange.py",
+      "ext": ".py",
+      "size": 26,
+      "keywords": [
+        "bybitmarketdata",
+        "bybit",
+        "market",
+        "data"
+      ],
+      "symbol_type": "model",
+      "name": "BybitMarketData",
+      "line_start": 9,
+      "line_end": 34,
+      "body_hash": "9ea9207d",
+      "confidence": "high",
+      "exported": true
+    },
+    {
+      "id": "smart_money_bot\\formatting.py",
+      "kind": "file",
+      "path": "smart_money_bot\\formatting.py",
+      "ext": ".py",
+      "size": 1548,
+      "keywords": [
+        "format_signal",
+        "format",
+        "signal",
+        "calculate_risk_reward",
+        "calculate",
+        "risk",
+        "reward"
+      ],
+      "content": "from __future__ import annotations\n\nfrom datetime import datetime, timezone\nfrom html import escape\n\nfrom .models import Signal\n\n\ndef format_signal(signal: Signal, now: datetime | None = None) -> str:\n    timestamp = now or datetime.now(timezone.utc)\n    side_label = \"LONG\" if signal.side == \"LONG\" else \"SHORT\"\n    side_icon = \"\ud83d\udfe2\" if signal.side == \"LONG\" else \"\ud83d\udd34\"\n    strength = f\"\ud83d\udd25 {signal.strength}\" if signal.strength == \"\u0421\u0418\u041b\u042c\u041d\u042b\u0419\" else signal.strength\n    risk_reward = calculate_risk_reward(signal)\n\n    return f\"\"\"\n{side_icon} <b>{side_label} SMC \u0421\u0418\u0413\u041d\u0410\u041b</b> | <code>{escape(signal.symbol)}</code>\n\n<b>Market Bias:</b>\n\u2022 4H: <b>{escape(signal.bias_4h)}</b>\n\u2022 1H: <b>{escape(signal.bias_1h)}</b>\n\n<b>15m Entry Point:</b>\n\u0426\u0435\u043d\u0430 \u0441\u0435\u0439\u0447\u0430\u0441: <code>{signal.current_price:.4f}</code>\n\u041b\u0438\u043a\u0432\u0438\u0434\u043d\u043e\u0441\u0442\u044c: High <code>{signal.recent_high:.4f}</code> | Low <code>{signal.recent_low:.4f}</code>\nPOI / Order Block: \u043e\u043a\u043e\u043b\u043e <code>{signal.poi:.4f}</code>\n\n<b>\u041f\u0440\u0438\u0447\u0438\u043d\u0430:</b> {escape(signal.reason)}\n<b>\u0421\u0438\u043b\u0430 \u0441\u0438\u0433\u043d\u0430\u043b\u0430:</b> {escape(strength)}\n\nStop-Loss: <code>{signal.stop_loss:.4f}</code>\nTake-Profit: <code>{signal.take_profit:.4f}</code> (\u043f\u0440\u0438\u043c\u0435\u0440\u043d\u043e 1:{risk_reward:.2f})\n\n{timestamp.strftime(\"%H:%M:%S\")} UTC\n\"\"\".strip()\n\n\ndef calculate_risk_reward(signal: Signal) -> float:\n    risk = abs(signal.current_price - signal.stop_loss)\n    reward = abs(signal.take_profit - signal.current_price)\n    if risk == 0:\n        return 0.0\n    return reward / risk\n",
+      "summary": "from __future__ import annotations. Contains 2 functions/classes: format_signal, calculate_risk_reward.",
+      "file_hash": "4b0daa8c"
+    },
+    {
+      "id": "smart_money_bot\\formatting.py::format_signal",
+      "kind": "symbol",
+      "path": "smart_money_bot\\formatting.py",
+      "ext": ".py",
+      "size": 27,
+      "keywords": [
+        "format_signal",
+        "format",
+        "signal"
+      ],
+      "symbol_type": "use_case",
+      "name": "format_signal",
+      "line_start": 8,
+      "line_end": 34,
+      "body_hash": "3bd0291a",
+      "confidence": "high",
+      "exported": true
+    },
+    {
+      "id": "smart_money_bot\\formatting.py::calculate_risk_reward",
+      "kind": "symbol",
+      "path": "smart_money_bot\\formatting.py",
+      "ext": ".py",
+      "size": 6,
+      "keywords": [
+        "calculate_risk_reward",
+        "calculate",
+        "risk",
+        "reward"
+      ],
+      "symbol_type": "use_case",
+      "name": "calculate_risk_reward",
+      "line_start": 37,
+      "line_end": 42,
+      "body_hash": "a92245f0",
+      "confidence": "high",
+      "exported": true
+    },
+    {
+      "id": "smart_money_bot\\main.py",
+      "kind": "file",
+      "path": "smart_money_bot\\main.py",
+      "ext": ".py",
+      "size": 660,
+      "keywords": [
+        "main"
+      ],
+      "content": "from __future__ import annotations\n\nfrom .config import load_settings\nfrom .exchange import BybitMarketData\nfrom .telegram_app import SmartMoneyBot\nfrom .watchlist import WatchlistStore\n\n\ndef main() -> None:\n    settings = load_settings()\n    market_data = BybitMarketData(settings.bybit_api_key, settings.bybit_api_secret)\n    watchlist = WatchlistStore(settings.watchlist_file)\n    bot = SmartMoneyBot(settings, market_data, watchlist)\n    application = bot.create_application()\n\n    print(f\"SMC Smart Money Bot \u0437\u0430\u043f\u0443\u0449\u0435\u043d | \u041c\u043e\u043d\u0435\u0442: {len(watchlist.load())}\")\n    application.run_polling()\n\n\nif __name__ == \"__main__\":\n    main()\n",
+      "summary": "from __future__ import annotations. Contains 1 function: main.",
+      "file_hash": "2f48a31e"
+    },
+    {
+      "id": "smart_money_bot\\main.py::main",
+      "kind": "symbol",
+      "path": "smart_money_bot\\main.py",
+      "ext": ".py",
+      "size": 13,
+      "keywords": [
+        "main"
+      ],
+      "symbol_type": "use_case",
+      "name": "main",
+      "line_start": 8,
+      "line_end": 20,
+      "body_hash": "4b76ab10",
+      "confidence": "high",
+      "exported": true
+    },
+    {
+      "id": "smart_money_bot\\models.py",
+      "kind": "file",
+      "path": "smart_money_bot\\models.py",
+      "ext": ".py",
+      "size": 469,
+      "keywords": [
+        "candle",
+        "signal"
+      ],
+      "content": "from dataclasses import dataclass\n\n\n@dataclass(frozen=True)\nclass Candle:\n    timestamp: int\n    open: float\n    high: float\n    low: float\n    close: float\n    volume: float\n\n\n@dataclass(frozen=True)\nclass Signal:\n    symbol: str\n    side: str\n    bias_4h: str\n    bias_1h: str\n    current_price: float\n    recent_high: float\n    recent_low: float\n    poi: float\n    reason: str\n    strength: str\n    stop_loss: float\n    take_profit: float\n",
+      "summary": "from dataclasses import dataclass. Contains 2 functions/classes: Candle, Signal.",
+      "file_hash": "1940fbf1"
+    },
+    {
+      "id": "smart_money_bot\\models.py::Candle",
+      "kind": "symbol",
+      "path": "smart_money_bot\\models.py",
+      "ext": ".py",
+      "size": 7,
+      "keywords": [
+        "candle"
+      ],
+      "symbol_type": "model",
+      "name": "Candle",
+      "line_start": 4,
+      "line_end": 10,
+      "body_hash": "29e0215a",
+      "confidence": "high",
+      "exported": true
+    },
+    {
+      "id": "smart_money_bot\\models.py::Signal",
+      "kind": "symbol",
+      "path": "smart_money_bot\\models.py",
+      "ext": ".py",
+      "size": 13,
+      "keywords": [
+        "signal"
+      ],
+      "symbol_type": "model",
+      "name": "Signal",
+      "line_start": 14,
+      "line_end": 26,
+      "body_hash": "03696f56",
+      "confidence": "high",
+      "exported": true
+    },
+    {
+      "id": "smart_money_bot\\telegram_app.py",
+      "kind": "file",
+      "path": "smart_money_bot\\telegram_app.py",
+      "ext": ".py",
+      "size": 5055,
+      "keywords": [
+        "smartmoneybot",
+        "smart",
+        "money",
+        "bot"
+      ],
+      "content": "from __future__ import annotations\n\nimport asyncio\nfrom datetime import datetime, timedelta, timezone\n\nfrom telegram import Update\nfrom telegram.constants import ParseMode\nfrom telegram.ext import Application, CommandHandler, ContextTypes\n\nfrom .analysis import analyze_market_data\nfrom .config import Settings\nfrom .exchange import BybitMarketData\nfrom .formatting import format_signal\nfrom .watchlist import WatchlistStore\n\n\nclass SmartMoneyBot:\n    def __init__(self, settings: Settings, market_data: BybitMarketData, watchlist: WatchlistStore):\n        self.settings = settings\n        self.market_data = market_data\n        self.watchlist = watchlist\n        self.last_signals: dict[str, datetime] = {}\n\n    def create_application(self) -> Application:\n        application = Application.builder().token(self.settings.telegram_token).build()\n        application.add_handler(CommandHandler(\"add\", self.add_symbol))\n        application.add_handler(CommandHandler(\"remove\", self.remove_symbol))\n        application.add_handler(CommandHandler(\"list\", self.list_symbols))\n        application.add_handler(CommandHandler(\"status\", self.status))\n        application.job_queue.run_repeating(\n            self.scan,\n            interval=self.settings.scan_interval_seconds,\n            first=10,\n        )\n        return application\n\n    async def add_symbol(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:\n        if update.message is None:\n            return\n        if not context.args:\n            await update.message.reply_text(\"\u041f\u0440\u0438\u043c\u0435\u0440: /add LABUSDT\")\n            return\n\n        symbol = context.args[0]\n        if self.watchlist.add(symbol):\n            await update.message.reply_html(f\"\u2705 \u0414\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u0430 <code>{WatchlistStore.normalize(symbol)}</code>\")\n        else:\n            await update.message.reply_text(\"\u26a0\ufe0f \u0423\u0436\u0435 \u0432 \u0441\u043f\u0438\u0441\u043a\u0435 \u0438\u043b\u0438 \u0441\u0438\u043c\u0432\u043e\u043b \u043f\u0443\u0441\u0442\u043e\u0439\")\n\n    async def remove_symbol(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:\n        if update.message is None:\n            return\n        if not context.args:\n            await update.message.reply_text(\"\u041f\u0440\u0438\u043c\u0435\u0440: /remove ENAUSDT\")\n            return\n\n        symbol = context.args[0]\n        if self.watchlist.remove(symbol):\n            await update.message.reply_html(f\"\ud83d\uddd1 \u0423\u0434\u0430\u043b\u0435\u043d\u0430 <code>{WatchlistStore.normalize(symbol)}</code>\")\n        else:\n            await update.message.reply_text(\"\u26a0\ufe0f \u0422\u0430\u043a\u043e\u0433\u043e \u0441\u0438\u043c\u0432\u043e\u043b\u0430 \u043d\u0435\u0442 \u0432 \u0441\u043f\u0438\u0441\u043a\u0435\")\n\n    async def list_symbols(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:\n        if update.message is None:\n            return\n\n        symbols = self.watchlist.load()\n        lines = \"\\n\".join(f\"\u2022 <code>{symbol}</code>\" for symbol in symbols)\n        await update.message.reply_html(f\"<b>SMC Watchlist:</b>\\n{lines}\")\n\n    async def status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:\n        if update.message is None:\n            return\n\n        await update.message.reply_text(\n            \"\u2705 SMC Bot \u0430\u043a\u0442\u0438\u0432\u0435\u043d\\n\\n\"\n            \"\ud83d\udce1 \u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0451\u043d \u0447\u0435\u0440\u0435\u0437 Bybit API\\n\"\n            f\"\ud83d\udc40 \u041c\u043e\u043d\u0438\u0442\u043e\u0440\u0438\u043c: {len(self.watchlist.load())} \u043c\u043e\u043d\u0435\u0442\\n\"\n            f\"\ud83d\udd04 \u0421\u043a\u0430\u043d\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u0435: \u043a\u0430\u0436\u0434\u044b\u0435 {self.settings.scan_interval_seconds} \u0441\u0435\u043a\"\n        )\n\n    async def scan(self, context: ContextTypes.DEFAULT_TYPE) -> None:\n        symbols = self.watchlist.load()\n        tasks = [self._scan_symbol(context, symbol) for symbol in symbols]\n        await asyncio.gather(*tasks)\n\n    async def _scan_symbol(self, context: ContextTypes.DEFAULT_TYPE, symbol: str) -> None:\n        try:\n            candles_15m = self.market_data.fetch_candles(symbol, \"15m\", 250)\n            candles_1h = self.market_data.fetch_candles(symbol, \"1h\", 150)\n            candles_4h = self.market_data.fetch_candles(symbol, \"4h\", 100)\n            signal = analyze_market_data(symbol, candles_15m, candles_1h, candles_4h)\n            if signal is None or self._is_in_cooldown(signal.symbol, signal.side):\n                return\n\n            await context.bot.send_message(\n                chat_id=self.settings.telegram_chat_id,\n                text=format_signal(signal),\n                parse_mode=ParseMode.HTML,\n            )\n            self.last_signals[self._cooldown_key(signal.symbol, signal.side)] = datetime.now(timezone.utc)\n        except Exception as exc:\n            print(f\"\u041e\u0448\u0438\u0431\u043a\u0430 {symbol}: {exc}\")\n\n    def _is_in_cooldown(self, symbol: str, side: str) -> bool:\n        key = self._cooldown_key(symbol, side)\n        last_sent_at = self.last_signals.get(key)\n        if last_sent_at is None:\n            return False\n\n        cooldown = timedelta(minutes=self.settings.signal_cooldown_minutes)\n        return datetime.now(timezone.utc) - last_sent_at < cooldown\n\n    @staticmethod\n    def _cooldown_key(symbol: str, side: str) -> str:\n        return f\"{symbol}_{side}\"\n",
+      "summary": "from __future__ import annotations. Contains 1 function: SmartMoneyBot.",
+      "file_hash": "066915f8"
+    },
+    {
+      "id": "smart_money_bot\\telegram_app.py::SmartMoneyBot",
+      "kind": "symbol",
+      "path": "smart_money_bot\\telegram_app.py",
+      "ext": ".py",
+      "size": 100,
+      "keywords": [
+        "smartmoneybot",
+        "smart",
+        "money",
+        "bot"
+      ],
+      "symbol_type": "model",
+      "name": "SmartMoneyBot",
+      "line_start": 16,
+      "line_end": 115,
+      "body_hash": "f7e796c5",
+      "confidence": "high",
+      "exported": true
+    },
+    {
+      "id": "smart_money_bot\\watchlist.py",
+      "kind": "file",
+      "path": "smart_money_bot\\watchlist.py",
+      "ext": ".py",
+      "size": 2043,
+      "keywords": [
+        "watchliststore",
+        "watchlist",
+        "store"
+      ],
+      "content": "from __future__ import annotations\n\nimport json\nfrom pathlib import Path\n\n\nDEFAULT_SYMBOLS = [\"ENAUSDT\", \"SUIUSDT\", \"XMRUSDT\", \"RIVERUSDT\", \"VVVUSDT\", \"LABUSDT\"]\n\n\nclass WatchlistStore:\n    def __init__(self, path: str | Path, default_symbols: list[str] | None = None):\n        self.path = Path(path)\n        self.default_symbols = default_symbols if default_symbols is not None else DEFAULT_SYMBOLS\n\n    def load(self) -> list[str]:\n        if not self.path.exists():\n            self.save(self.default_symbols)\n            return list(self.default_symbols)\n\n        with self.path.open(\"r\", encoding=\"utf-8\") as file:\n            symbols = json.load(file)\n\n        if not isinstance(symbols, list):\n            raise ValueError(f\"Watchlist file must contain a JSON list: {self.path}\")\n\n        return [self.normalize(symbol) for symbol in symbols if self.normalize(symbol)]\n\n    def save(self, symbols: list[str]) -> None:\n        normalized = []\n        seen = set()\n        for symbol in symbols:\n            clean_symbol = self.normalize(symbol)\n            if clean_symbol and clean_symbol not in seen:\n                normalized.append(clean_symbol)\n                seen.add(clean_symbol)\n\n        with self.path.open(\"w\", encoding=\"utf-8\") as file:\n            json.dump(normalized, file, indent=2, ensure_ascii=False)\n\n    def add(self, symbol: str) -> bool:\n        symbols = self.load()\n        clean_symbol = self.normalize(symbol)\n        if not clean_symbol or clean_symbol in symbols:\n            return False\n\n        symbols.append(clean_symbol)\n        self.save(symbols)\n        return True\n\n    def remove(self, symbol: str) -> bool:\n        symbols = self.load()\n        clean_symbol = self.normalize(symbol)\n        if clean_symbol not in symbols:\n            return False\n\n        symbols.remove(clean_symbol)\n        self.save(symbols)\n        return True\n\n    @staticmethod\n    def normalize(symbol: str) -> str:\n        return str(symbol).strip().upper()\n",
+      "summary": "from __future__ import annotations. Contains 1 function: WatchlistStore.",
+      "file_hash": "1df2f01a"
+    },
+    {
+      "id": "smart_money_bot\\watchlist.py::WatchlistStore",
+      "kind": "symbol",
+      "path": "smart_money_bot\\watchlist.py",
+      "ext": ".py",
+      "size": 53,
+      "keywords": [
+        "watchliststore",
+        "watchlist",
+        "store"
+      ],
+      "symbol_type": "model",
+      "name": "WatchlistStore",
+      "line_start": 9,
+      "line_end": 61,
+      "body_hash": "8fe2deea",
+      "confidence": "high",
+      "exported": true
+    },
+    {
+      "id": "smart_money_bot\\__init__.py",
+      "kind": "file",
+      "path": "smart_money_bot\\__init__.py",
+      "ext": ".py",
+      "size": 47,
+      "keywords": [
+        "smart",
+        "money",
+        "telegram",
+        "package"
+      ],
+      "content": "\"\"\"Smart Money SMC Telegram bot package.\"\"\"\n\n",
+      "summary": "Smart Money SMC Telegram bot package.",
+      "file_hash": "5281f072"
+    },
+    {
+      "id": "smart_money_bot\\__main__.py",
+      "kind": "file",
+      "path": "smart_money_bot\\__main__.py",
+      "ext": ".py",
+      "size": 36,
+      "keywords": [],
+      "content": "from .main import main\n\n\nmain()\n",
+      "summary": "from .main import main.",
+      "file_hash": "e43547fb"
+    },
+    {
+      "id": "tests\\test_analysis.py",
+      "kind": "file",
+      "path": "tests\\test_analysis.py",
+      "ext": ".py",
+      "size": 2189,
+      "keywords": [
+        "make_candles",
+        "make",
+        "candles",
+        "analysistest",
+        "analysis",
+        "test"
+      ],
+      "content": "import unittest\n\nfrom smart_money_bot.analysis import Candle, analyze_market_data, calculate_atr\n\n\ndef make_candles(opens, closes, highs=None, lows=None):\n    highs = highs or [max(o, c) + 1 for o, c in zip(opens, closes)]\n    lows = lows or [min(o, c) - 1 for o, c in zip(opens, closes)]\n    return [\n        Candle(timestamp=index, open=open_, high=high, low=low, close=close, volume=100)\n        for index, (open_, close, high, low) in enumerate(zip(opens, closes, highs, lows))\n    ]\n\n\nclass AnalysisTest(unittest.TestCase):\n    def test_calculate_atr_uses_true_range(self):\n        candles = make_candles(\n            opens=[10, 11, 9],\n            closes=[10, 11, 9],\n            highs=[12, 15, 14],\n            lows=[9, 10, 8],\n        )\n\n        atr = calculate_atr(candles, period=2)\n\n        self.assertIsNone(atr[0])\n        self.assertEqual(atr[1], 4)\n        self.assertEqual(atr[2], 5.5)\n\n    def test_analyze_market_data_returns_long_signal_with_risk_levels(self):\n        candles_15m = make_candles(\n            [100] * 39 + [105],\n            [101] * 39 + [112],\n            highs=[103] * 39 + [113],\n            lows=[98] * 39 + [104],\n        )\n        candles_1h = make_candles([90] * 20, [110] * 20)\n        candles_4h = make_candles([80] * 25, [120] * 25)\n\n        signal = analyze_market_data(\"ENAUSDT\", candles_15m, candles_1h, candles_4h)\n\n        self.assertIsNotNone(signal)\n        self.assertEqual(signal.side, \"LONG\")\n        self.assertEqual(signal.symbol, \"ENAUSDT\")\n        self.assertLess(signal.stop_loss, signal.current_price)\n        self.assertLess(signal.current_price, signal.take_profit)\n        self.assertEqual(signal.bias_1h, \"BULLISH\")\n        self.assertEqual(signal.bias_4h, \"BULLISH\")\n\n    def test_analyze_market_data_returns_none_when_timeframes_conflict(self):\n        candles_15m = make_candles([100] * 40, [102] * 40)\n        candles_1h = make_candles([120] * 20, [90] * 20)\n        candles_4h = make_candles([80] * 25, [120] * 25)\n\n        self.assertIsNone(analyze_market_data(\"SUIUSDT\", candles_15m, candles_1h, candles_4h))\n\n\nif __name__ == \"__main__\":\n    unittest.main()\n",
+      "summary": "import unittest. Contains 2 functions/classes: make_candles, AnalysisTest.",
+      "file_hash": "c71b44b1"
+    },
+    {
+      "id": "tests\\test_analysis.py::make_candles",
+      "kind": "symbol",
+      "path": "tests\\test_analysis.py",
+      "ext": ".py",
+      "size": 7,
+      "keywords": [
+        "make_candles",
+        "make",
+        "candles"
+      ],
+      "symbol_type": "use_case",
+      "name": "make_candles",
+      "line_start": 5,
+      "line_end": 11,
+      "body_hash": "8d4a7afa",
+      "confidence": "high",
+      "exported": true
+    },
+    {
+      "id": "tests\\test_analysis.py::AnalysisTest",
+      "kind": "symbol",
+      "path": "tests\\test_analysis.py",
+      "ext": ".py",
+      "size": 45,
+      "keywords": [
+        "analysistest",
+        "analysis",
+        "test"
+      ],
+      "symbol_type": "model",
+      "name": "AnalysisTest",
+      "line_start": 14,
+      "line_end": 58,
+      "body_hash": "a0290917",
+      "confidence": "high",
+      "exported": true
+    },
+    {
+      "id": "tests\\test_formatting.py",
+      "kind": "file",
+      "path": "tests\\test_formatting.py",
+      "ext": ".py",
+      "size": 1629,
+      "keywords": [
+        "formattingtest",
+        "formatting",
+        "test"
+      ],
+      "content": "import unittest\nfrom datetime import datetime, timezone\n\nfrom smart_money_bot.formatting import calculate_risk_reward, format_signal\nfrom smart_money_bot.models import Signal\n\n\nclass FormattingTest(unittest.TestCase):\n    def test_calculate_risk_reward_uses_signal_levels(self):\n        signal = Signal(\n            symbol=\"RIVERUSDT\",\n            side=\"SHORT\",\n            bias_4h=\"BEARISH\",\n            bias_1h=\"BEARISH\",\n            current_price=5.0710,\n            recent_high=5.2600,\n            recent_low=5.0010,\n            poi=5.2600,\n            reason=\"\u041c\u0435\u0434\u0432\u0435\u0436\u044c\u044f \u0441\u0432\u0435\u0447\u0430 + \u0441\u043e\u043f\u0440\u043e\u0442\u0438\u0432\u043b\u0435\u043d\u0438\u0435\",\n            strength=\"\u0421\u0440\u0435\u0434\u043d\u0438\u0439\",\n            stop_loss=5.1465,\n            take_profit=4.9368,\n        )\n\n        self.assertAlmostEqual(calculate_risk_reward(signal), 1.77748, places=5)\n\n    def test_format_signal_shows_calculated_risk_reward(self):\n        signal = Signal(\n            symbol=\"RIVERUSDT\",\n            side=\"SHORT\",\n            bias_4h=\"BEARISH\",\n            bias_1h=\"BEARISH\",\n            current_price=5.0710,\n            recent_high=5.2600,\n            recent_low=5.0010,\n            poi=5.2600,\n            reason=\"\u041c\u0435\u0434\u0432\u0435\u0436\u044c\u044f \u0441\u0432\u0435\u0447\u0430 + \u0441\u043e\u043f\u0440\u043e\u0442\u0438\u0432\u043b\u0435\u043d\u0438\u0435\",\n            strength=\"\u0421\u0440\u0435\u0434\u043d\u0438\u0439\",\n            stop_loss=5.1465,\n            take_profit=4.9368,\n        )\n\n        message = format_signal(signal, now=datetime(2026, 6, 11, 20, 0, 46, tzinfo=timezone.utc))\n\n        self.assertIn(\"Take-Profit: <code>4.9368</code> (\u043f\u0440\u0438\u043c\u0435\u0440\u043d\u043e 1:1.78)\", message)\n\n\nif __name__ == \"__main__\":\n    unittest.main()\n",
+      "summary": "import unittest. Contains 1 function: FormattingTest.",
+      "file_hash": "e7bf43f1"
+    },
+    {
+      "id": "tests\\test_formatting.py::FormattingTest",
+      "kind": "symbol",
+      "path": "tests\\test_formatting.py",
+      "ext": ".py",
+      "size": 42,
+      "keywords": [
+        "formattingtest",
+        "formatting",
+        "test"
+      ],
+      "symbol_type": "model",
+      "name": "FormattingTest",
+      "line_start": 7,
+      "line_end": 48,
+      "body_hash": "fe52e9ed",
+      "confidence": "high",
+      "exported": true
+    },
+    {
+      "id": "tests\\test_watchlist.py",
+      "kind": "file",
+      "path": "tests\\test_watchlist.py",
+      "ext": ".py",
+      "size": 1394,
+      "keywords": [
+        "watchliststoretest",
+        "watchlist",
+        "store",
+        "test"
+      ],
+      "content": "import tempfile\nimport unittest\nfrom pathlib import Path\n\nfrom smart_money_bot.watchlist import WatchlistStore\n\n\nclass WatchlistStoreTest(unittest.TestCase):\n    def test_watchlist_creates_default_file(self):\n        with tempfile.TemporaryDirectory() as tmpdir:\n            path = Path(tmpdir) / \"watchlist.json\"\n            store = WatchlistStore(path, default_symbols=[\"ENAUSDT\", \"SUIUSDT\"])\n\n            self.assertEqual(store.load(), [\"ENAUSDT\", \"SUIUSDT\"])\n            self.assertTrue(path.exists())\n\n    def test_watchlist_normalizes_symbols_and_avoids_duplicates(self):\n        with tempfile.TemporaryDirectory() as tmpdir:\n            path = Path(tmpdir) / \"watchlist.json\"\n            store = WatchlistStore(path, default_symbols=[])\n\n            self.assertTrue(store.add(\" enausdt \"))\n            self.assertFalse(store.add(\"ENAUSDT\"))\n            self.assertEqual(store.load(), [\"ENAUSDT\"])\n\n    def test_watchlist_remove_persists_change(self):\n        with tempfile.TemporaryDirectory() as tmpdir:\n            path = Path(tmpdir) / \"watchlist.json\"\n            store = WatchlistStore(path, default_symbols=[\"ENAUSDT\", \"SUIUSDT\"])\n\n            self.assertTrue(store.remove(\"enausdt\"))\n            self.assertFalse(store.remove(\"missing\"))\n            self.assertEqual(store.load(), [\"SUIUSDT\"])\n\n\nif __name__ == \"__main__\":\n    unittest.main()\n",
+      "summary": "import tempfile. Contains 1 function: WatchlistStoreTest.",
+      "file_hash": "dc3ab486"
+    },
+    {
+      "id": "tests\\test_watchlist.py::WatchlistStoreTest",
+      "kind": "symbol",
+      "path": "tests\\test_watchlist.py",
+      "ext": ".py",
+      "size": 30,
+      "keywords": [
+        "watchliststoretest",
+        "watchlist",
+        "store",
+        "test"
+      ],
+      "symbol_type": "model",
+      "name": "WatchlistStoreTest",
+      "line_start": 7,
+      "line_end": 36,
+      "body_hash": "4d09e102",
+      "confidence": "high",
+      "exported": true
+    }
+  ],
+  "edges": [
+    {
+      "from": "run_bot.py",
+      "to": "smart_money_bot.main",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\analysis.py",
+      "to": "__future__",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\analysis.py",
+      "to": "statistics",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\analysis.py",
+      "to": ".models",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\analysis.py",
+      "to": "smart_money_bot\\analysis.py::calculate_atr",
+      "rel": "contains"
+    },
+    {
+      "from": "smart_money_bot\\analysis.py",
+      "to": "smart_money_bot\\analysis.py::analyze_market_data",
+      "rel": "contains"
+    },
+    {
+      "from": "smart_money_bot\\config.py",
+      "to": "os",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\config.py",
+      "to": "__future__",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\config.py",
+      "to": "dataclasses",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\config.py",
+      "to": "dotenv",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\config.py",
+      "to": "smart_money_bot\\config.py::load_settings",
+      "rel": "contains"
+    },
+    {
+      "from": "smart_money_bot\\config.py",
+      "to": "smart_money_bot\\config.py::Settings",
+      "rel": "contains"
+    },
+    {
+      "from": "smart_money_bot\\exchange.py",
+      "to": "ccxt",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\exchange.py",
+      "to": "__future__",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\exchange.py",
+      "to": "typing",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\exchange.py",
+      "to": ".models",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\exchange.py",
+      "to": "smart_money_bot\\exchange.py::BybitMarketData",
+      "rel": "contains"
+    },
+    {
+      "from": "smart_money_bot\\formatting.py",
+      "to": "__future__",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\formatting.py",
+      "to": "datetime",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\formatting.py",
+      "to": "html",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\formatting.py",
+      "to": ".models",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\formatting.py",
+      "to": "smart_money_bot\\formatting.py::format_signal",
+      "rel": "contains"
+    },
+    {
+      "from": "smart_money_bot\\formatting.py",
+      "to": "smart_money_bot\\formatting.py::calculate_risk_reward",
+      "rel": "contains"
+    },
+    {
+      "from": "smart_money_bot\\main.py",
+      "to": "__future__",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\main.py",
+      "to": ".config",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\main.py",
+      "to": ".exchange",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\main.py",
+      "to": ".telegram_app",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\main.py",
+      "to": ".watchlist",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\main.py",
+      "to": "smart_money_bot\\main.py::main",
+      "rel": "contains"
+    },
+    {
+      "from": "smart_money_bot\\models.py",
+      "to": "dataclasses",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\models.py",
+      "to": "smart_money_bot\\models.py::Candle",
+      "rel": "contains"
+    },
+    {
+      "from": "smart_money_bot\\models.py",
+      "to": "smart_money_bot\\models.py::Signal",
+      "rel": "contains"
+    },
+    {
+      "from": "smart_money_bot\\telegram_app.py",
+      "to": "asyncio",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\telegram_app.py",
+      "to": "__future__",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\telegram_app.py",
+      "to": "datetime",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\telegram_app.py",
+      "to": "telegram",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\telegram_app.py",
+      "to": "telegram.constants",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\telegram_app.py",
+      "to": "telegram.ext",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\telegram_app.py",
+      "to": ".analysis",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\telegram_app.py",
+      "to": ".config",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\telegram_app.py",
+      "to": ".exchange",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\telegram_app.py",
+      "to": ".formatting",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\telegram_app.py",
+      "to": ".watchlist",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\telegram_app.py",
+      "to": "smart_money_bot\\telegram_app.py::SmartMoneyBot",
+      "rel": "contains"
+    },
+    {
+      "from": "smart_money_bot\\watchlist.py",
+      "to": "json",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\watchlist.py",
+      "to": "__future__",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\watchlist.py",
+      "to": "pathlib",
+      "rel": "imports"
+    },
+    {
+      "from": "smart_money_bot\\watchlist.py",
+      "to": "smart_money_bot\\watchlist.py::WatchlistStore",
+      "rel": "contains"
+    },
+    {
+      "from": "smart_money_bot\\__main__.py",
+      "to": ".main",
+      "rel": "imports"
+    },
+    {
+      "from": "tests\\test_analysis.py",
+      "to": "unittest",
+      "rel": "imports"
+    },
+    {
+      "from": "tests\\test_analysis.py",
+      "to": "smart_money_bot.analysis",
+      "rel": "imports"
+    },
+    {
+      "from": "tests\\test_analysis.py",
+      "to": "tests\\test_analysis.py::make_candles",
+      "rel": "contains"
+    },
+    {
+      "from": "tests\\test_analysis.py",
+      "to": "tests\\test_analysis.py::AnalysisTest",
+      "rel": "contains"
+    },
+    {
+      "from": "tests\\test_formatting.py",
+      "to": "unittest",
+      "rel": "imports"
+    },
+    {
+      "from": "tests\\test_formatting.py",
+      "to": "datetime",
+      "rel": "imports"
+    },
+    {
+      "from": "tests\\test_formatting.py",
+      "to": "smart_money_bot.formatting",
+      "rel": "imports"
+    },
+    {
+      "from": "tests\\test_formatting.py",
+      "to": "smart_money_bot.models",
+      "rel": "imports"
+    },
+    {
+      "from": "tests\\test_formatting.py",
+      "to": "tests\\test_formatting.py::FormattingTest",
+      "rel": "contains"
+    },
+    {
+      "from": "tests\\test_watchlist.py",
+      "to": "tempfile",
+      "rel": "imports"
+    },
+    {
+      "from": "tests\\test_watchlist.py",
+      "to": "unittest",
+      "rel": "imports"
+    },
+    {
+      "from": "tests\\test_watchlist.py",
+      "to": "pathlib",
+      "rel": "imports"
+    },
+    {
+      "from": "tests\\test_watchlist.py",
+      "to": "smart_money_bot.watchlist",
+      "rel": "imports"
+    },
+    {
+      "from": "tests\\test_watchlist.py",
+      "to": "tests\\test_watchlist.py::WatchlistStoreTest",
+      "rel": "contains"
+    }
+  ]
 }
